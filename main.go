@@ -26,7 +26,7 @@ func uploadBlob(ctx context.Context, blobName string, blobReader io.Reader, stor
 	var results = make(chan error, len(storages))
 	defer close(results)
 
-	readers, closer := getReaders(blobReader, len(storages))
+	readers, writer, closer := getReaders(len(storages))
 
 	// compose reader for each backend
 	for i, store := range storages {
@@ -39,13 +39,15 @@ func uploadBlob(ctx context.Context, blobName string, blobReader io.Reader, stor
 		}(store, readers[i])
 	}
 
+	go func() {
+		io.Copy(writer, blobReader)
+		closer.Close()
+	}()
+
 	var errs error
 	for i := 0; i < len(storages); i++ {
 		if r := <-results; r != nil {
 			errs = multierror.Append(errs, r)
-		}
-		if i == 0 {
-			closer.Close()
 		}
 	}
 	return errs
@@ -61,25 +63,19 @@ func getStorages() []*Storage {
 	return storages
 }
 
-func getReaders(source io.Reader, count int) ([]io.Reader, io.Closer) {
+func getReaders(count int) ([]io.Reader, io.Writer, io.Closer) {
 	readers := make([]io.Reader, 0, count)
 	pipeWriters := make([]io.Writer, 0, count)
 	pipeClosers := make([]io.Closer, 0, count)
 
-	for i := 0; i < count-1; i++ {
+	for i := 0; i < count; i++ {
 		pr, pw := io.Pipe()
 		readers = append(readers, pr)
 		pipeWriters = append(pipeWriters, pw)
 		pipeClosers = append(pipeClosers, pw)
 	}
 
-	multiWriter := io.MultiWriter(pipeWriters...)
-	teeReader := io.TeeReader(source, multiWriter)
-
-	// append teereader so it populates data to the rest of the readers
-	readers = append([]io.Reader{teeReader}, readers...)
-
-	return readers, NewMultiCloser(pipeClosers)
+	return readers, io.MultiWriter(pipeWriters...), NewMultiCloser(pipeClosers)
 }
 
 type Storage struct {
