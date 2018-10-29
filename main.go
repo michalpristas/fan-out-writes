@@ -40,7 +40,8 @@ func uploadBlob(ctx context.Context, blobName string, blobReader io.Reader, stor
 	}
 
 	go func() {
-		io.Copy(writer, blobReader)
+		buf := make([]byte, 1)
+		io.CopyBuffer(writer, blobReader, buf)
 		closer.Close()
 	}()
 
